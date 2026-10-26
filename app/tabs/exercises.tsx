@@ -1,0 +1,220 @@
+// app/(tabs)/exercises.tsx
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView, Platform} from 'react-native';
+import { useRouter } from 'expo-router'; 
+import { collection, onSnapshot, query, orderBy, where } from 'firebase/firestore';
+import { db, auth } from '../../firebaseConfig'; 
+import { StatusBar } from 'expo-status-bar';
+import { useIsFocused, useScrollToTop } from '@react-navigation/native';
+
+export default function ExercisesScreen() {
+  const router = useRouter();  
+  const isFocused = useIsFocused();
+  const scrollViewRef = useRef<ScrollView>(null);
+  useScrollToTop(scrollViewRef);
+
+  useEffect(() => {
+    if (isFocused) {
+      scrollViewRef.current?.scrollTo({ y: 0, animated: true });
+    }
+  }, [isFocused]);
+  
+  const [strands, setStrands] = useState<any[]>([]);
+  // เก็บข้อมูลผลสอบแบบละเอียด (Score + Recorded Total)
+  const [examResults, setExamResults] = useState<{[key: string]: { score: number, recordedTotal: number }}>({});
+  const [questionCounts, setQuestionCounts] = useState<{[key: string]: number}>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) return; 
+
+    // 1. ดึงข้อมูลสาระ 
+    const qStrands = query(collection(db, "strands"), orderBy("no"));
+    const unsubStrands = onSnapshot(qStrands, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setStrands(data);
+    });
+
+    // 2. ดึงคะแนนสอบ 
+    const qResults = query(collection(db, "exercise_results"), where("student_id", "==", user.uid));
+    const unsubResults = onSnapshot(qResults, (snapshot) => {
+        const map: any = {};
+        snapshot.docs.forEach(doc => {
+            const d = doc.data();
+            map[d.strand_id] = { score: d.score, recordedTotal: d.totalQuestions || 0 };
+        });
+        setExamResults(map);
+    });
+
+    // 3. ดึงจำนวนข้อสอบจริง 
+    const qQuestions = query(collection(db, "questions"), where("type", "==", "exercise"));
+    const unsubQuestions = onSnapshot(qQuestions, (snapshot) => {
+        const counts: {[key: string]: number} = {};
+        snapshot.docs.forEach(doc => {
+            const d = doc.data();
+            if (d.ref_id) {
+                counts[d.ref_id] = (counts[d.ref_id] || 0) + 1;
+            }
+        });
+        setQuestionCounts(counts);
+        setLoading(false);
+    });
+
+    return () => { unsubStrands(); unsubResults(); unsubQuestions(); };
+  }, []);
+
+  const renderCard = (item: any) => {
+    const resultData = examResults[item.id]; 
+    const currentTotal = questionCounts[item.id] || 0; 
+    
+    let score = 0;
+    if (resultData && resultData.recordedTotal === currentTotal && currentTotal > 0) {
+        score = resultData.score;
+    }
+
+    // คำนวณเปอร์เซ็นต์
+    let percent = 0;
+    if (currentTotal > 0) {
+        percent = Math.round((score / currentTotal) * 100);
+    }
+
+    // กำหนดสีและสถานะ
+    let cardColor = '#EF5350'; // สีแดงเป็นค่าเริ่มต้น
+    let statusText = "เริ่มทำ";
+    
+    if (currentTotal === 0) {
+        statusText = "ไม่มีโจทย์";
+        cardColor = '#EF5350'; // ยังคงเป็นสีแดงตามธีม
+    } else if (percent >= 80) {
+        cardColor = '#5edd63'; // เขียว
+        statusText = "ยอดเยี่ยม";
+    } else if (percent >= 50) {
+        cardColor = '#f8bf23'; // เหลือง
+        statusText = "ผ่านเกณฑ์";
+    } else {
+        cardColor = '#EF5350'; // แดง
+        statusText = score > 0 ? "พยายามอีกนิด" : "เริ่มทำ";
+    }
+
+    return (
+      <TouchableOpacity 
+        key={item.id}
+        style={[styles.card, { backgroundColor: cardColor }]}
+        activeOpacity={0.9}
+        onPress={() => {
+            router.push({ 
+                pathname: "/quiz", 
+                params: { strandId: item.id, title: item.title } 
+            } as any);
+        }}
+      >
+        <View style={styles.cardInner}>
+            <View style={{flex: 1, paddingRight: 15}}>
+                <Text style={styles.cardTitle}>{item.no}. {item.title}</Text>
+                {item.subtitle && <Text style={styles.cardSubtitle}>({item.subtitle})</Text>}
+                
+                {/* Badge คะแนนสอบ */}
+                <View style={styles.scoreBadge}>
+                    <Text style={styles.scoreBadgeText}>ทำเเบบฝึกหัดได้คะเเนน : {score}/{currentTotal}</Text>
+                </View>
+            </View>
+            
+            <View style={styles.cardRightAction}>
+                <View style={styles.whiteBox}>
+                    <Text style={[styles.boxText, { color: cardColor }]}>{percent}%</Text>
+                </View>
+                <View style={styles.whiteBoxButton}>
+                    <Text style={[styles.boxTextButton, { color: cardColor }]}>
+                        {statusText}
+                    </Text>
+                </View>
+            </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  return (
+    <View style={styles.container}>
+      {isFocused && <StatusBar style="light" translucent={true} backgroundColor="transparent" />}
+      
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>แบบฝึกหัดท้ายบท</Text>
+        <Text style={styles.headerSub}>ทดสอบความรู้หลังเรียนจบแต่ละสาระ</Text>
+      </View>
+
+      {loading ? (
+        <ActivityIndicator size="large" color="#EF4444" style={{ marginTop: 150 }} />
+      ) : (
+        <ScrollView 
+            ref={scrollViewRef}
+            contentContainerStyle={{ padding: 20, paddingTop: Platform.OS === 'android' ? 140 : 150, paddingBottom: 100 }}
+        >
+            {strands.map((item) => renderCard(item))}
+            {strands.length === 0 && (
+                <Text style={{ textAlign: 'center', color: '#999', marginTop: 50 }}>
+                    ไม่พบข้อมูลสาระการเรียนรู้
+                </Text>
+            )}
+        </ScrollView>
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#fff' },
+  header: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    paddingTop: Platform.OS === 'android' ? 45 : 60,
+    paddingBottom: 20,
+    paddingHorizontal: 25,
+    backgroundColor: '#eec924',
+    borderBottomLeftRadius: 30,
+    borderBottomRightRadius: 30,
+    elevation: 5,
+    alignItems: 'center'
+  },
+  headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#fff' },
+  headerSub: { fontSize: 14, color: '#FFEBEE', marginTop: 5 },
+
+  card: {
+    borderRadius: 16, marginBottom: 15, padding: 20,
+    minHeight: 110, justifyContent: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, 
+    shadowOpacity: 0.2, shadowRadius: 5, elevation: 4
+  },
+  cardInner: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  cardTitle: { fontSize: 18, fontWeight: 'bold', color: '#fff', marginBottom: 2, lineHeight: 26 },
+  cardSubtitle: { fontSize: 14, color: 'rgba(255,255,255,0.95)', marginBottom: 8 },
+  
+  scoreBadge: {
+    backgroundColor: 'rgba(0,0,0,0.2)', 
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    alignSelf: 'flex-start',
+    marginTop: 5
+  },
+  scoreBadgeText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
+  
+  cardRightAction: { alignItems: 'flex-end', justifyContent: 'center', gap: 8 },
+  whiteBox: { 
+    backgroundColor: '#fff', paddingHorizontal: 0, paddingVertical: 5, borderRadius: 8,
+    width: 90, alignItems: 'center', justifyContent: 'center', marginBottom: 2,
+    elevation: 2
+  },
+  boxText: { fontSize: 12, fontWeight: 'bold' },
+  
+  whiteBoxButton: {
+    backgroundColor: '#fff', paddingHorizontal: 0, paddingVertical: 6, borderRadius: 8,
+    width: 90, alignItems: 'center', justifyContent: 'center',
+    elevation: 2
+  },
+  boxTextButton: { fontWeight: 'bold', fontSize: 12 },
+});
