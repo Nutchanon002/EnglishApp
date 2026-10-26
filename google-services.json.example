@@ -9,7 +9,7 @@
       "client_info": {
         "mobilesdk_app_id": "YOUR_MOBILE_SDK_APP_ID",
         "android_client_info": {
-          "package_name": "com.nutchanon7331.englishapp"
+          "package_name": "YOUR_PACKAGE_NAME"
         }
       },
       "oauth_client": [
@@ -37,3 +37,4 @@
   ],
   "configuration_version": "1"
 }
+
